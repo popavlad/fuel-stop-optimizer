@@ -1,16 +1,9 @@
-from django.shortcuts import render
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from django.conf import settings
 from .services.routing_service import RoutingService
 from .services.fuel_data_service import FuelDataService
 import logging
-import traceback
 from django.http import JsonResponse
 from django.views import View
 import json
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +20,12 @@ class OptimizeRouteView(View):
             origin = data.get('start')
             destination = data.get('end')
             
+            if not origin or not destination:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'start and end locations required'
+                })
+            
             # Get route with distance
             route_data = self.routing_service.get_route(origin, destination)
             
@@ -36,18 +35,14 @@ class OptimizeRouteView(View):
                 total_distance=route_data['total_distance']
             )
             
-            # Calculate average price of all stations along route
-            route_avg_price = sum(float(station['Retail Price']) for station in route_stations) / len(route_stations)
-            logger.info(f"\nAverage price of all stations along route: ${round(route_avg_price, 3)}/gallon")
-            
             # Find optimal fuel stops
             fuel_stops = self.fuel_data_service.find_optimal_fuel_stops(
                 route_stations=route_stations,
                 total_distance=route_data['total_distance']
             )
             
-            # Calculate actual fuel costs and gallons for each stop
-            MPG = 10  # miles per gallon
+            # Calculate actual fuel costs and gallons
+            MPG = 10
             total_gallons = 0
             total_cost = 0
             
@@ -61,23 +56,16 @@ class OptimizeRouteView(View):
                 else:
                     distance_to_next = route_data['total_distance'] - current_stop['route_distance']
                 
-                # Calculate gallons needed for this leg
                 gallons_needed = distance_to_next / MPG
                 cost = float(current_stop['Retail Price']) * gallons_needed
                 
-                # Add to totals
                 total_gallons += gallons_needed
                 total_cost += cost
-                
-                # Log each purchase
-                logger.info(f"Purchased {round(gallons_needed, 1)} gallons at ${current_stop['Retail Price']} = ${round(cost, 2)}")
             
+            # Calculate average prices and savings
+            route_avg_price = sum(float(station['Retail Price']) for station in route_stations) / len(route_stations)
             avg_fuel_price = sum(float(stop['Retail Price']) for stop in fuel_stops) / len(fuel_stops)
-            
-            # Calculate savings vs route average
-            cost_at_avg_price = route_avg_price * total_gallons
-            total_savings = cost_at_avg_price - total_cost
-            logger.info(f"\nTotal savings vs route average: ${round(total_savings, 2)} ({round(total_cost, 2)} vs {round(cost_at_avg_price, 2)})")
+            total_savings = (route_avg_price * total_gallons) - total_cost
             
             return JsonResponse({
                 'success': True,

@@ -7,12 +7,9 @@ logger = logging.getLogger(__name__)
 
 class FuelDataService:
     def __init__(self):
-        # Load stations with coordinates
         df = pd.read_csv('fuel_prices_with_coords.csv')
         self.stations = df.dropna(subset=['latitude', 'longitude']).to_dict('records')
-        logger.info(f"Loaded {len(self.stations)} stations with coordinates")
         
-        # Pre-calculate station regions
         self.station_regions = {}
         for station in self.stations:
             lat_region = int(2 * float(station['latitude'])) / 2
@@ -23,7 +20,6 @@ class FuelDataService:
             self.station_regions[key].append(station)
 
     def find_stations_near_route(self, route_points: List[Dict], max_distance: float = 2) -> List[Dict]:
-        """Find stations near route points efficiently."""
         nearby_stations = []
         seen = set()
         
@@ -45,7 +41,6 @@ class FuelDataService:
                                     seen.add(station['OPIS Truckstop ID'])
                                     station['distance'] = round(distance, 2)
                                     nearby_stations.append(station)
-        
         return nearby_stations
 
     def _calculate_distance(self, lat1, lon1, lat2, lon2) -> float:
