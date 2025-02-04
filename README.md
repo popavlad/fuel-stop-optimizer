@@ -1,14 +1,72 @@
-# Fuel Stop Optimizer API
+# Route Optimizer with Fuel Stops
 
-This Django API helps optimize fuel stops along a route between two locations in the USA. It takes into account fuel prices at various truck stops and calculates the most cost-effective places to refuel.
+A Django API that finds optimal fuel stops along a route, optimizing for lowest total fuel cost.
 
 ## Features
 
-- Route optimization between any two locations in the USA
-- Finds optimal fuel stops based on current fuel prices
-- Takes into account vehicle range (500 miles) and fuel efficiency (10 MPG)
-- Returns detailed route information with coordinates for mapping
-- Calculates total fuel cost for the journey
+- Finds cheapest fuel stops along any US route
+- Takes into account:
+  - 500-mile tank range
+  - 10 MPG fuel consumption
+- Ensures truck never runs out of fuel
+- Calculates total cost and savings
+
+## Setup
+
+1. Install dependencies:
+
+```bash
+pip install django==3.2.23
+pip install requests
+pip install python-dotenv
+```
+
+2. Add OpenRouteService API key to .env:
+
+```
+ORS_API_KEY=your_key_here
+```
+
+3. Run server:
+
+```bash
+python manage.py runserver
+```
+
+## API Usage
+
+Send POST request to `/api/optimize/`:
+
+```json
+{
+  "start": "Miami, FL",
+  "end": "Seattle, WA"
+}
+```
+
+Response example:
+
+```json
+{
+  "success": true,
+  "total_distance": 3456.7,
+  "fuel_stops": [
+    {
+      "Truckstop Name": "FLYING J #123",
+      "City": "Houston",
+      "State": "TX",
+      "Retail Price": "3.249",
+      "route_distance": 350.5
+    }
+  ],
+  "total_fuel_cost": 839.23,
+  "average_price_per_gallon": 3.066,
+  "route_average_price": 3.275,
+  "total_gallons": 273.4,
+  "total_savings_based_on_average_price_for_route": 57.23,
+  "number_of_stops": 6
+}
+```
 
 ## Requirements
 

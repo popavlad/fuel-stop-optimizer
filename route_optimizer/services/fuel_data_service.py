@@ -1,243 +1,264 @@
 import pandas as pd
-import re
-from typing import List, Dict, Tuple, Optional
-from django.conf import settings
+from typing import List, Dict
 import logging
-import math
+from math import radians, sin, cos, sqrt, atan2
 
 logger = logging.getLogger(__name__)
 
 class FuelDataService:
     def __init__(self):
-        self.fuel_data = self._load_and_process_fuel_data()
-        # Define comprehensive highway-to-state mapping
-        self.highway_states = {
-            'I-95': ['FL', 'GA', 'SC', 'NC', 'VA', 'MD', 'DE', 'PA', 'NJ', 'NY', 'CT', 'RI', 'MA', 'ME'],
-            'I-75': ['FL', 'GA', 'TN', 'KY', 'OH', 'MI'],
-            'I-10': ['FL', 'AL', 'MS', 'LA', 'TX', 'NM', 'AZ', 'CA'],
-            'I-12': ['LA'],
-            'I-35': ['TX', 'OK', 'KS', 'MO', 'IA', 'MN'],
-            'I-80': ['NJ', 'PA', 'OH', 'IN', 'IL', 'IA', 'NE', 'WY', 'UT', 'NV', 'CA'],
-            'I-70': ['UT', 'CO', 'KS', 'MO', 'IL', 'IN', 'OH', 'WV', 'PA', 'MD'],
-            'I-15': ['CA', 'NV', 'AZ', 'UT', 'ID', 'MT'],
-            'I-20': ['TX', 'LA', 'MS', 'AL', 'GA', 'SC'],
-            'I-40': ['CA', 'AZ', 'NM', 'TX', 'OK', 'AR', 'TN', 'NC'],
-            'I-78': ['PA', 'NJ', 'NY'],
-            'I-94': ['MT', 'ND', 'MN', 'WI', 'IL', 'IN', 'MI'],
-            'I-90': ['WA', 'ID', 'MT', 'WY', 'SD', 'MN', 'WI', 'IL', 'IN', 'OH', 'PA', 'NY', 'MA'],
-            'I-84': ['OR', 'ID', 'UT', 'PA', 'NY', 'CT', 'MA'],
-            'I-280': ['CA', 'IL', 'IA'],
-            'I-76': ['CO', 'NE', 'OH', 'PA', 'NJ'],
-            'I-410': ['TX'],
-            'I-5': ['CA', 'OR', 'WA']
-        }
+        # Load stations with coordinates
+        df = pd.read_csv('fuel_prices_with_coords.csv')
+        self.stations = df.dropna(subset=['latitude', 'longitude']).to_dict('records')
+        logger.info(f"Loaded {len(self.stations)} stations with coordinates")
         
-        # Test I-80 stations
-        test_stations = self.fuel_data[self.fuel_data['highway'] == 'I-80'].sort_values(['State', 'exit_mile'])
-        print("\nI-80 stations by state and exit:")
-        print(test_stations[['State', 'exit_mile', 'Truckstop Name', 'Address']].head(20))
-        
-    def _load_and_process_fuel_data(self) -> pd.DataFrame:
-        """Load and process the fuel price data."""
-        logger.info("Loading fuel price data...")
-        df = pd.read_csv(settings.FUEL_PRICES_CSV)
-        
-        # Clean up state data
-        df['State'] = df['State'].str.strip()
-        
-        # Extract highway and exit information from the Address field
-        df['highway_info'] = df['Address'].apply(self._parse_highway_info)
-        df = df.dropna(subset=['highway_info'])
-        
-        # Split the highway_info tuple into separate columns
-        df[['highway', 'exit_mile']] = pd.DataFrame(df['highway_info'].tolist(), index=df.index)
-        
-        # Log some sample data for debugging
-        sample_data = df[['Address', 'highway', 'exit_mile', 'State']].head(5)
-        logger.info(f"Sample processed data:\n{sample_data}")
-        
-        return df
-    
-    def _parse_highway_info(self, address: str) -> Optional[Tuple[str, float]]:
-        """Extract highway and mile marker from address."""
-        if pd.isna(address):
-            return None
-        
-        # Convert to uppercase and clean up the address
-        address = str(address).upper().strip()
-        
-        # First try to find a highway number
-        highway = None
-        
-        # Check for Interstate highways
-        if 'I-' in address or 'I ' in address or 'INTERSTATE' in address:
-            match = re.search(r'I[-\s]?(\d+)|INTERSTATE\s*(\d+)', address)
-            if match:
-                num = match.group(1) or match.group(2)
-                highway = f'I-{num}'
-        
-        # Check for US highways
-        elif 'US' in address or 'U.S.' in address:
-            match = re.search(r'US[-\s]?(\d+)|U\.?S\.?(?:HWY)?\s*(\d+)', address)
-            if match:
-                num = match.group(1) or match.group(2)
-                highway = f'US-{num}'
-        
-        # Find mile/exit number
-        mile = 0
-        if 'EXIT' in address:
-            match = re.search(r'EXIT\s*(\d+)', address)
-            if match:
-                try:
-                    mile = float(match.group(1))
-                except ValueError:
-                    pass
-        
-        return (highway, mile) if highway else None
-    
-    def get_stations_on_route(self, highways: List[Dict], state_info: Dict) -> pd.DataFrame:
-        """Get all fuel stations along the specified highways."""
-        logger.info(f"Finding stations along {len(highways)} highway segments")
-        
-        if not highways:
-            logger.error("No highway segments provided")
-            return pd.DataFrame()
-        
-        route_stations = []
-        seen_stations = set()
-        
-        for highway_segment in highways:
-            highway = highway_segment['highway']
-            
-            # Get all stations on this highway
-            highway_mask = self.fuel_data['highway'].apply(self._normalize_highway_name) == self._normalize_highway_name(highway)
-            highway_stations = self.fuel_data[highway_mask].copy()
-            
-            if highway_stations.empty:
-                logger.warning(f"No stations found on highway {highway}")
-                continue
-            
-            # Process each state segment
-            for state_segment in highway_segment['state_segments']:
-                state = state_segment['state']
-                state_start = state_segment['start_mile']
-                state_end = state_segment['end_mile']
-                
-                # Get stations for this state
-                state_stations = highway_stations[highway_stations['State'] == state].copy()
-                
-                if state_stations.empty:
-                    logger.warning(f"No stations found in {state} on {highway}")
-                    continue
-                
-                # Calculate absolute position on route
-                # Station's position = start of state segment + station's exit number
-                state_stations.loc[:, 'distance_from_start'] = state_start + state_stations['exit_mile']
-                
-                # Create unique station IDs
-                state_stations.loc[:, 'station_id'] = state_stations.apply(
-                    lambda x: f"{highway}_{state}_{x['exit_mile']}_{x['Truckstop Name']}", 
-                    axis=1
-                )
-                
-                # Filter out stations we've already seen
-                new_stations = state_stations[~state_stations['station_id'].isin(seen_stations)]
-                seen_stations.update(new_stations['station_id'].tolist())
-                
-                if not new_stations.empty:
-                    route_stations.append(new_stations)
-                    logger.info(f"Added {len(new_stations)} stations from {state} on {highway} between miles {state_start:.1f}-{state_end:.1f}")
-        
-        if route_stations:
-            result = pd.concat(route_stations)
-            logger.info(f"Total stations found: {len(result)}")
-            return result
-        
-        logger.warning("No stations found along route")
-        return pd.DataFrame()
-    
-    def _normalize_highway_name(self, highway: str) -> str:
-        """Normalize highway name for consistent matching."""
-        if pd.isna(highway):
-            return ''
-        
-        # Convert to string and uppercase
-        highway = str(highway).upper().strip()
-        
-        # Remove any whitespace around hyphens
-        highway = re.sub(r'\s*-\s*', '-', highway)
-        
-        # Ensure I-XX format for Interstate highways
-        highway = re.sub(r'^I\s*(\d)', r'I-\1', highway)
-        highway = re.sub(r'^INTERSTATE\s*(\d)', r'I-\1', highway)
-        
-        # Remove directional suffixes
-        highway = re.sub(r'\s*[NSEW]$', '', highway)
-        
-        return highway
-    
-    def find_optimal_fuel_stops(self, route_stations: pd.DataFrame, total_distance: float) -> List[Dict]:
-        """Public method to find optimal fuel stops along the route."""
-        logger.info(f"Planning route of {total_distance:.1f} miles")
-        logger.info(f"Found {len(route_stations)} total stations")
-        
-        if route_stations.empty:
-            logger.warning("No stations available for optimization")
-            return []
-            
-        # Get distance range of available stations
-        if not route_stations.empty:
-            min_dist = route_stations['distance_from_start'].min()
-            max_dist = route_stations['distance_from_start'].max()
-            logger.info(f"Station distance range: {min_dist:.1f} to {max_dist:.1f} miles")
-        
-        # Call the private implementation with vehicle range from settings
-        return self._find_optimal_fuel_stops(
-            stations_df=route_stations,
-            total_distance=total_distance,
-            vehicle_range=settings.VEHICLE_RANGE_MILES
-        )
+        # Pre-calculate station regions
+        self.station_regions = {}
+        for station in self.stations:
+            lat_region = int(2 * float(station['latitude'])) / 2
+            lon_region = int(2 * float(station['longitude'])) / 2
+            key = (lat_region, lon_region)
+            if key not in self.station_regions:
+                self.station_regions[key] = []
+            self.station_regions[key].append(station)
 
-    def _find_optimal_fuel_stops(self, stations_df: pd.DataFrame, total_distance: float, vehicle_range: float) -> List[Dict]:
-        """Find fuel stops by always picking the furthest reachable station."""
-        logger.info(f"Starting station search along {total_distance:.1f} mile route")
+    def find_stations_near_route(self, route_points: List[Dict], max_distance: float = 2) -> List[Dict]:
+        """Find stations near route points efficiently."""
+        nearby_stations = []
+        seen = set()
         
-        # Sort stations by distance
-        stations = stations_df.sort_values('distance_from_start')
-        logger.info(f"Found {len(stations)} total stations from {stations['distance_from_start'].min():.1f} to {stations['distance_from_start'].max():.1f} miles")
-        
-        # Just get the furthest reachable station each time
-        found_stations = []
-        current_pos = 0
-        
-        while current_pos < total_distance:
-            # Get all stations we can reach with our remaining fuel
-            reachable_stations = stations[
-                (stations['distance_from_start'] > current_pos) & 
-                (stations['distance_from_start'] <= current_pos + vehicle_range)
-            ]
+        # Find stations near route points
+        for point in route_points:
+            point_lat = int(2 * float(point['lat'])) / 2
+            point_lon = int(2 * float(point['lon'])) / 2
             
-            if reachable_stations.empty:
-                logger.info(f"No more reachable stations from position {current_pos:.1f}")
+            for lat_offset in [-0.5, 0, 0.5]:
+                for lon_offset in [-0.5, 0, 0.5]:
+                    region_key = (point_lat + lat_offset, point_lon + lon_offset)
+                    if region_key in self.station_regions:
+                        for station in self.station_regions[region_key]:
+                            if station['OPIS Truckstop ID'] not in seen:
+                                distance = self._calculate_distance(
+                                    point['lat'], point['lon'],
+                                    station['latitude'], station['longitude']
+                                )
+                                if distance <= max_distance:
+                                    seen.add(station['OPIS Truckstop ID'])
+                                    station['distance'] = round(distance, 2)
+                                    nearby_stations.append(station)
+        
+        return nearby_stations
+
+    def _calculate_distance(self, lat1, lon1, lat2, lon2) -> float:
+        """Calculate distance between two points in miles."""
+        R = 6371  # Earth's radius in km
+        
+        lat1, lon1 = float(lat1), float(lon1)
+        lat2, lon2 = float(lat2), float(lon2)
+        
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+        
+        return R * c * 0.621371  # Convert km to miles
+
+    def get_cheapest_stations(self, route_points: List[Dict], num_stations: int = 5) -> List[Dict]:
+        """Get cheapest stations near the route."""
+        nearby_stations = self.find_stations_near_route(route_points)
+        
+        # Sort by price and distance
+        sorted_stations = sorted(
+            nearby_stations,
+            key=lambda x: (float(x['Retail Price']), x['distance'])
+        )
+        
+        return sorted_stations[:num_stations]
+
+    def find_fuel_stops(self, route_points: List[Dict], total_distance: float) -> List[Dict]:
+        """Find optimal fuel stops along route."""
+        TANK_RANGE = 500  # miles
+        RESERVE_RANGE = 150  # miles
+        SEARCH_RANGE = 150  # miles to look ahead for stations
+        
+        fuel_stops = []
+        distance_covered = 0
+        range_left = TANK_RANGE
+        last_point = None
+        
+        for current_point in route_points:
+            # Calculate distance from last point
+            if last_point:
+                distance = self._calculate_distance(
+                    last_point['lat'], last_point['lon'],
+                    current_point['lat'], current_point['lon']
+                )
+                distance_covered += distance
+                range_left -= distance
+                
+                # Check if we need to look for gas (at 350 miles)
+                if range_left <= RESERVE_RANGE:
+                    # Get points for next SEARCH_RANGE miles
+                    search_points = []
+                    search_distance = 0
+                    
+                    # Collect points within SEARCH_RANGE
+                    for point in route_points[route_points.index(current_point):]:
+                        search_points.append(point)
+                        if len(search_points) > 1:
+                            search_distance += self._calculate_distance(
+                                search_points[-2]['lat'], search_points[-2]['lon'],
+                                search_points[-1]['lat'], search_points[-1]['lon']
+                            )
+                            if search_distance > SEARCH_RANGE:
+                                break
+                    
+                    # Find stations in search range
+                    stations = self.find_stations_near_route(search_points, max_distance=5)
+                    
+                    if stations:
+                        # Log all available stations
+                        logger.info(f"\nLooking for stations after {round(distance_covered, 1)} miles:")
+                        for station in sorted(stations, key=lambda x: float(x['Retail Price'])):
+                            # Calculate actual distance to station from route start
+                            station_distance = distance_covered - (search_distance / 2)  # Approximate station position
+                            logger.info(f"  ${station['Retail Price']} - {station['Truckstop Name']} ({station['City']}, {station['State']}) at {round(station_distance, 1)} miles")
+                        
+                        # Get cheapest station
+                        cheapest = min(stations, key=lambda x: float(x['Retail Price']))
+                        station_distance = distance_covered - (search_distance / 2)  # Use actual station position
+                        
+                        fuel_stops.append({
+                            'station': cheapest,
+                            'distance_from_start': round(station_distance, 1)
+                        })
+                        # Reset range based on where we actually found the station
+                        range_left = TANK_RANGE - (distance_covered - station_distance)
+                        logger.info(f"Selected: ${cheapest['Retail Price']} - {cheapest['Truckstop Name']} at {round(station_distance, 1)} miles")
+            
+            last_point = current_point
+        
+        logger.info(f"\nFound {len(fuel_stops)} fuel stops for {round(total_distance)} mile route")
+        return fuel_stops
+
+    def get_all_route_stations(self, route_points: List[Dict], total_distance: float) -> List[Dict]:
+        """Get all stations along the route with their actual positions."""
+        all_stations = {}  # Use dict to deduplicate by station ID
+        distance_covered = 0
+        last_point = None
+        
+        # Sample points every ~2 miles to ensure better coverage
+        step = max(1, len(route_points) // 1500)  # More points for better coverage
+        sampled_points = route_points[::step]
+        logger.info(f"Sampling {len(sampled_points)} points from {len(route_points)} total points")
+        
+        # For each sampled point
+        for current_point in sampled_points:
+            # Calculate distance from last point
+            if last_point:
+                distance = self._calculate_distance(
+                    last_point['lat'], last_point['lon'],
+                    current_point['lat'], current_point['lon']
+                )
+                distance_covered += distance
+                
+                # Find stations near this point with increased search radius
+                stations = self.find_stations_near_route([current_point], max_distance=7)  # Increased from 5 to 7 miles
+                
+                # Add distance information to each station
+                for station in stations:
+                    station_id = station['OPIS Truckstop ID']
+                    if station_id not in all_stations:
+                        station['route_distance'] = round(distance_covered, 1)
+                        all_stations[station_id] = station
+            
+            last_point = current_point
+        
+        # Convert to list and sort by distance
+        unique_stations = list(all_stations.values())
+        unique_stations.sort(key=lambda x: x['route_distance'])
+        
+        logger.info(f"\nFound {len(unique_stations)} unique stations along {round(total_distance)} mile route:")
+        for station in unique_stations:
+            logger.info(f"Mile {station['route_distance']}: ${station['Retail Price']} - {station['Truckstop Name']} ({station['City']}, {station['State']})")
+        
+        return unique_stations
+
+    def find_optimal_fuel_stops(self, route_stations: List[Dict], total_distance: float) -> List[Dict]:
+        """Find optimal fuel stops along route."""
+        TANK_RANGE = 500  # Total range on full tank (miles)
+        SEARCH_START = 350  # Start looking for stations at 350 miles (TANK_RANGE - SAFETY_BUFFER)
+        SAFETY_BUFFER = 150  # Don't let tank go below 150 miles of range
+        
+        fuel_stops = []
+        next_search_at = SEARCH_START
+        
+        while next_search_at < total_distance:
+            if fuel_stops and (total_distance - fuel_stops[-1]['route_distance']) <= TANK_RANGE:
+                logger.info(f"\nCan reach destination from last stop ({round(total_distance - fuel_stops[-1]['route_distance'])} miles remaining)")
                 break
             
-            # Take the furthest one
-            next_station = reachable_stations.iloc[-1]
-            logger.info(f"From position {current_pos:.1f}, furthest reachable station is at {next_station['distance_from_start']:.1f} miles: {next_station['Truckstop Name']}")
+            # Find stations in the next 150-mile window
+            search_window = []
+            for station in route_stations:
+                if next_search_at <= station['route_distance'] <= next_search_at + SAFETY_BUFFER:
+                    search_window.append(station)
             
-            found_stations.append({
-                'station_name': str(next_station['Truckstop Name']).strip(),
-                'address': str(next_station['Address']).strip(),
-                'price': float(next_station['Retail Price']),
-                'highway': str(next_station['highway']).strip(),
-                'exit_mile': float(next_station['exit_mile']),
-                'distance_from_start': float(next_station['distance_from_start'])
-            })
-            
-            current_pos = next_station['distance_from_start']
+            if search_window:
+                # Get cheapest station in window
+                cheapest = min(search_window, key=lambda x: float(x['Retail Price']))
+                fuel_stops.append(cheapest)
+                logger.info(f"\nFuel stop {len(fuel_stops)}: ${cheapest['Retail Price']} - {cheapest['Truckstop Name']} at mile {cheapest['route_distance']}")
+                
+                # Next search starts 350 miles after this station
+                next_search_at = cheapest['route_distance'] + 350
+            else:
+                # No stations in window - look for last station before gap that can get us to next viable station
+                logger.warning(f"No stations found between mile {next_search_at} and {next_search_at + SAFETY_BUFFER}")
+                
+                # Find next viable stations (stations with more stations within 350 miles after them)
+                next_viable_stations = []
+                for station in route_stations:
+                    if station['route_distance'] > next_search_at + SAFETY_BUFFER:
+                        # Check if this station has more stations within 350 miles after it
+                        stations_after = [s for s in route_stations 
+                                        if station['route_distance'] + 350 <= s['route_distance'] <= station['route_distance'] + 500]
+                        if stations_after:
+                            next_viable_stations.append(station)
+                            break  # Found first viable station after gap
+                
+                if next_viable_stations:
+                    next_viable = next_viable_stations[0]
+                    logger.info(f"Found next viable station at mile {next_viable['route_distance']}")
+                    
+                    # Find stations before gap that can reach the next viable station
+                    last_stop_distance = fuel_stops[-1]['route_distance'] if fuel_stops else 0
+                    gap_stations = []
+                    
+                    for station in route_stations:
+                        if last_stop_distance < station['route_distance'] < next_search_at:
+                            distance_to_next_viable = next_viable['route_distance'] - station['route_distance']
+                            if distance_to_next_viable <= TANK_RANGE:
+                                gap_stations.append(station)
+                    
+                    if gap_stations:
+                        # Get cheapest station that can reach next viable station
+                        best_station = min(gap_stations, key=lambda x: float(x['Retail Price']))
+                        fuel_stops.append(best_station)
+                        logger.info(f"\nFuel stop {len(fuel_stops)} (before gap): ${best_station['Retail Price']} - {best_station['Truckstop Name']} at mile {best_station['route_distance']}")
+                        logger.info(f"This station can reach next viable station at mile {next_viable['route_distance']}")
+                        
+                        # Next search starts 350 miles after this station
+                        next_search_at = best_station['route_distance'] + 350
+                    else:
+                        logger.error(f"Cannot find station that can reach next viable station at mile {next_viable['route_distance']}")
+                        next_search_at += SAFETY_BUFFER
+                else:
+                    logger.error(f"Cannot find any viable stations after gap")
+                    next_search_at += SAFETY_BUFFER
         
-        logger.info("\nFinal station list:")
-        for stop in found_stations:
-            logger.info(f"Stop at {stop['distance_from_start']:.1f} miles: {stop['station_name']}")
-            
-        return found_stations 
+        logger.info(f"\nFound {len(fuel_stops)} optimal fuel stops")
+        return fuel_stops 

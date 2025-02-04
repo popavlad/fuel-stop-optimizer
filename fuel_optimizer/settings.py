@@ -51,7 +51,6 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -181,3 +180,6 @@ LOGGING = {
         },
     },
 }
+
+# Add to existing settings
+ORS_API_KEY = '5b3ce3597851110001cf62485314b0727dcf407f888d83feaac73772'

@@ -7,100 +7,93 @@ from .services.routing_service import RoutingService
 from .services.fuel_data_service import FuelDataService
 import logging
 import traceback
+from django.http import JsonResponse
+from django.views import View
+import json
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 # Create your views here.
 
-class OptimizeRouteView(APIView):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        try:
-            self.routing_service = RoutingService()
-            self.fuel_service = FuelDataService()
-        except Exception as e:
-            logger.error(f"Initialization error: {str(e)}\n{traceback.format_exc()}")
-            raise
-    
-    def post(self, request):
-        """
-        Optimize route with fuel stops between start and end locations.
+class OptimizeRouteView(View):
+    def __init__(self):
+        self.routing_service = RoutingService()
+        self.fuel_data_service = FuelDataService()
         
-        Request body:
-        {
-            "start": "New York, NY",
-            "end": "Los Angeles, CA"
-        }
-        """
+    def post(self, request):
         try:
-            # Validate input
-            start = request.data.get('start')
-            end = request.data.get('end')
+            data = json.loads(request.body)
+            origin = data.get('start')
+            destination = data.get('end')
             
-            logger.info(f"Received request with start={start}, end={end}")
+            # Get route with distance
+            route_data = self.routing_service.get_route(origin, destination)
             
-            if not start or not end:
-                return Response(
-                    {"error": "Both start and end locations are required"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Get all stations along route
+            route_stations = self.fuel_data_service.get_all_route_stations(
+                route_points=route_data['points'],
+                total_distance=route_data['total_distance']
+            )
             
-            # Get route information with state info
-            try:
-                highway_segments, total_distance, route_coordinates, state_info = self.routing_service.get_route(start, end)
-            except Exception as e:
-                logger.error(f"Routing error: {str(e)}\n{traceback.format_exc()}")
-                return Response(
-                    {"error": f"Routing error: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-            # Get fuel stations along the route, now including state info
-            try:
-                route_stations = self.fuel_service.get_stations_on_route(highway_segments, state_info)
-            except Exception as e:
-                logger.error(f"Fuel station error: {str(e)}\n{traceback.format_exc()}")
-                return Response(
-                    {"error": f"Fuel station error: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            # Calculate average price of all stations along route
+            route_avg_price = sum(float(station['Retail Price']) for station in route_stations) / len(route_stations)
+            logger.info(f"\nAverage price of all stations along route: ${round(route_avg_price, 3)}/gallon")
             
             # Find optimal fuel stops
-            try:
-                fuel_stops = self.fuel_service.find_optimal_fuel_stops(route_stations, total_distance)
-            except Exception as e:
-                logger.error(f"Optimization error: {str(e)}\n{traceback.format_exc()}")
-                return Response(
-                    {"error": f"Optimization error: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            fuel_stops = self.fuel_data_service.find_optimal_fuel_stops(
+                route_stations=route_stations,
+                total_distance=route_data['total_distance']
+            )
             
-            # Calculate total fuel cost
-            total_gallons = total_distance / settings.VEHICLE_MPG
-            total_cost = sum(stop['price'] * (settings.VEHICLE_RANGE_MILES / settings.VEHICLE_MPG) 
-                           for stop in fuel_stops[:-1])
+            # Calculate actual fuel costs and gallons for each stop
+            MPG = 10  # miles per gallon
+            total_gallons = 0
+            total_cost = 0
             
-            # Add remaining fuel needed for last segment
-            if fuel_stops:
-                remaining_distance = total_distance - fuel_stops[-1]['distance_from_start']
-                remaining_gallons = remaining_distance / settings.VEHICLE_MPG
-                total_cost += fuel_stops[-1]['price'] * remaining_gallons
+            for i in range(len(fuel_stops)):
+                current_stop = fuel_stops[i]
+                
+                # Calculate distance to next stop or destination
+                if i < len(fuel_stops) - 1:
+                    next_stop = fuel_stops[i + 1]
+                    distance_to_next = next_stop['route_distance'] - current_stop['route_distance']
+                else:
+                    distance_to_next = route_data['total_distance'] - current_stop['route_distance']
+                
+                # Calculate gallons needed for this leg
+                gallons_needed = distance_to_next / MPG
+                cost = float(current_stop['Retail Price']) * gallons_needed
+                
+                # Add to totals
+                total_gallons += gallons_needed
+                total_cost += cost
+                
+                # Log each purchase
+                logger.info(f"Purchased {round(gallons_needed, 1)} gallons at ${current_stop['Retail Price']} = ${round(cost, 2)}")
             
-            return Response({
-                'route': {
-                    'start': start,
-                    'end': end,
-                    'total_distance': round(total_distance, 2),
-                    'coordinates': route_coordinates
-                },
+            avg_fuel_price = sum(float(stop['Retail Price']) for stop in fuel_stops) / len(fuel_stops)
+            
+            # Calculate savings vs route average
+            cost_at_avg_price = route_avg_price * total_gallons
+            total_savings = cost_at_avg_price - total_cost
+            logger.info(f"\nTotal savings vs route average: ${round(total_savings, 2)} ({round(total_cost, 2)} vs {round(cost_at_avg_price, 2)})")
+            
+            return JsonResponse({
+                'success': True,
+                'total_distance': round(route_data['total_distance'], 1),
                 'fuel_stops': fuel_stops,
-                'total_cost': round(total_cost, 2),
-                'total_gallons': round(total_gallons, 2)
+                'total_fuel_cost': round(total_cost, 2),
+                'average_price_per_gallon': round(avg_fuel_price, 3),
+                'route_average_price': round(route_avg_price, 3),
+                'total_gallons': round(total_gallons, 1),
+                'total_savings_based_on_average_price_for_route': round(total_savings, 2),
+                'number_of_stops': len(fuel_stops)
             })
             
         except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}\n{traceback.format_exc()}")
-            return Response(
-                {"error": f"An unexpected error occurred: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            logger.error(f"Failed: {str(e)}")
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            })
