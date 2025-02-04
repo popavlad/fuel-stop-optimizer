@@ -7,7 +7,6 @@ import json
 
 logger = logging.getLogger(__name__)
 
-# Create your views here.
 
 class OptimizeRouteView(View):
     def __init__(self):
@@ -41,15 +40,13 @@ class OptimizeRouteView(View):
                 total_distance=route_data['total_distance']
             )
             
-            # Calculate actual fuel costs and gallons
+            # Calculate costs
             MPG = 10
             total_gallons = 0
             total_cost = 0
             
             for i in range(len(fuel_stops)):
                 current_stop = fuel_stops[i]
-                
-                # Calculate distance to next stop or destination
                 if i < len(fuel_stops) - 1:
                     next_stop = fuel_stops[i + 1]
                     distance_to_next = next_stop['route_distance'] - current_stop['route_distance']
@@ -58,19 +55,31 @@ class OptimizeRouteView(View):
                 
                 gallons_needed = distance_to_next / MPG
                 cost = float(current_stop['Retail Price']) * gallons_needed
-                
                 total_gallons += gallons_needed
                 total_cost += cost
             
-            # Calculate average prices and savings
+            # Calculate savings
             route_avg_price = sum(float(station['Retail Price']) for station in route_stations) / len(route_stations)
             avg_fuel_price = sum(float(stop['Retail Price']) for stop in fuel_stops) / len(fuel_stops)
             total_savings = (route_avg_price * total_gallons) - total_cost
             
             return JsonResponse({
                 'success': True,
-                'total_distance': round(route_data['total_distance'], 1),
-                'fuel_stops': fuel_stops,
+                'route': {
+                    'points': route_data['points'],  # All route waypoints for drawing
+                    'total_distance': round(route_data['total_distance'], 1)
+                },
+                'fuel_stops': [{
+                    'name': stop['Truckstop Name'],
+                    'city': stop['City'],
+                    'state': stop['State'],
+                    'price': float(stop['Retail Price']),
+                    'location': {
+                        'lat': float(stop['latitude']),
+                        'lon': float(stop['longitude'])
+                    },
+                    'route_distance': stop['route_distance']
+                } for stop in fuel_stops],
                 'total_fuel_cost': round(total_cost, 2),
                 'average_price_per_gallon': round(avg_fuel_price, 3),
                 'route_average_price': round(route_avg_price, 3),
