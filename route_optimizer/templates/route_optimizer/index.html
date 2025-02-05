@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Route Optimizer</title>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}"></script>
+    <style>
+      #map {
+        height: 500px;
+        width: 100%;
+        margin-top: 20px;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .input-group {
+        margin-bottom: 20px;
+      }
+      input[type="text"] {
+        padding: 8px;
+        margin-right: 10px;
+        width: 300px;
+      }
+      button {
+        padding: 8px 20px;
+        background-color: #4285f4;
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="input-group">
+        <input
+          type="text"
+          id="start"
+          placeholder="Start location (e.g., Miami, FL)"
+        />
+        <input
+          type="text"
+          id="end"
+          placeholder="End location (e.g., Seattle, WA)"
+        />
+        <button onclick="findRoute()">Find Route</button>
+      </div>
+      <div id="map"></div>
+      <div id="results"></div>
+    </div>
+
+    <script>
+      let map;
+      let markers = [];
+      let routeLine;
+
+      function initMap() {
+        map = new google.maps.Map(document.getElementById("map"), {
+          zoom: 4,
+          center: { lat: 39.8283, lng: -98.5795 }, // Center of USA
+        });
+      }
+
+      async function findRoute() {
+        const start = document.getElementById("start").value;
+        const end = document.getElementById("end").value;
+
+        try {
+          const response = await fetch("/optimize/", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              start: start,
+              end: end,
+            }),
+          });
+
+          const data = await response.json();
+          if (data.success) {
+            displayRoute(data);
+          }
+        } catch (error) {
+          console.error("Error:", error);
+        }
+      }
+
+      function displayRoute(data) {
+        // Clear previous markers and route
+        markers.forEach((marker) => marker.setMap(null));
+        if (routeLine) routeLine.setMap(null);
+        markers = [];
+
+        // Draw route
+        const routeCoords = data.route.points.map((point) => ({
+          lat: point.lat,
+          lng: point.lon,
+        }));
+
+        routeLine = new google.maps.Polyline({
+          path: routeCoords,
+          geodesic: true,
+          strokeColor: "#4285f4",
+          strokeWeight: 2,
+        });
+        routeLine.setMap(map);
+
+        // Add markers for fuel stops
+        data.fuel_stops.forEach((stop) => {
+          const marker = new google.maps.Marker({
+            position: {
+              lat: stop.location.lat,
+              lng: stop.location.lon,
+            },
+            map: map,
+            title: `${stop.name} - $${stop.price}`,
+          });
+          markers.push(marker);
+        });
+
+        // Fit map to show all points
+        const bounds = new google.maps.LatLngBounds();
+        routeCoords.forEach((coord) => bounds.extend(coord));
+        map.fitBounds(bounds);
+
+        // Display results
+        document.getElementById("results").innerHTML = `
+                <h3>Route Summary:</h3>
+                <p>Total Distance: ${data.route.total_distance} miles</p>
+                <p>Number of Fuel Stops: ${data.number_of_stops}</p>
+                <p>Total Fuel Cost: $${data.total_fuel_cost}</p>
+                <p>Total Gallons: ${data.total_gallons}</p>
+                <p>Savings: $${data.total_savings_based_on_average_price_for_route}</p>
+            `;
+      }
+
+      // Initialize map when page loads
+      window.onload = initMap;
+    </script>
+  </body>
+</html>

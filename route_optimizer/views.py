@@ -1,16 +1,18 @@
-from .services.routing_service import RoutingService
 from .services.fuel_data_service import FuelDataService
+from .services.google_maps_service import GoogleMapsService
 import logging
 from django.http import JsonResponse
 from django.views import View
 import json
+from django.views.generic import TemplateView
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 
 class OptimizeRouteView(View):
     def __init__(self):
-        self.routing_service = RoutingService()
+        self.google_maps_service = GoogleMapsService()
         self.fuel_data_service = FuelDataService()
         
     def post(self, request):
@@ -25,8 +27,8 @@ class OptimizeRouteView(View):
                     'error': 'start and end locations required'
                 })
             
-            # Get route with distance
-            route_data = self.routing_service.get_route(origin, destination)
+            # Get route with distance using Google Maps
+            route_data = self.google_maps_service.get_route(origin, destination)
             
             # Get all stations along route
             route_stations = self.fuel_data_service.get_all_route_stations(
@@ -94,3 +96,12 @@ class OptimizeRouteView(View):
                 'success': False,
                 'error': str(e)
             })
+
+
+class IndexView(TemplateView):
+    template_name = "route_optimizer/index.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['google_maps_api_key'] = settings.GOOGLE_MAPS_API_KEY
+        return context

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -24,10 +25,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/3.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-@hhqo1_6--5ne6mbc@si4lyuuyqod9cg&b1b)61jp41^dtl754'
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = []
 
@@ -182,4 +183,10 @@ LOGGING = {
 }
 
 # Add to existing settings
-ORS_API_KEY = '5b3ce3597851110001cf62485314b0727dcf407f888d83feaac73772'
+
+# Frontend key (with referrer restrictions)
+
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+
+# Backend key (with IP restrictions)
+GOOGLE_MAPS_SERVER_KEY = os.getenv('GOOGLE_MAPS_SERVER_KEY')
