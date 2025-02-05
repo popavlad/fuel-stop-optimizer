@@ -131,13 +131,13 @@ class FuelDataService:
         SEARCH_START = TANK_RANGE * 0.7  # Start looking at 70% tank depletion (350 miles)
         SAFETY_BUFFER = 150  # Look for stations within next 150 miles
         
-        
         logger.info(f"\nStarting with full tank ({TANK_SIZE} gallons, {TANK_RANGE} mile range)")
         
         fuel_stops = []
         next_search_at = SEARCH_START  # Start searching at 350 miles
         
         while next_search_at < total_distance:
+            # Calculate remaining range and fuel
             remaining_range = TANK_RANGE
             if fuel_stops:
                 # Calculate remaining range from last stop
@@ -156,7 +156,14 @@ class FuelDataService:
             if search_window:
                 cheapest = min(search_window, key=lambda x: float(x['Retail Price']))
                 fuel_stops.append(cheapest)
-                gallons_needed = TANK_SIZE  # Full tank refill
+                
+                # Calculate actual gallons needed based on fuel consumed
+                distance_traveled = cheapest['route_distance']
+                if len(fuel_stops) > 1:
+                    distance_traveled -= fuel_stops[-2]['route_distance']
+                gallons_consumed = distance_traveled / MPG
+                gallons_needed = min(TANK_SIZE, gallons_consumed) 
+                
                 fuel_cost = float(cheapest['Retail Price']) * gallons_needed
                 logger.info(f"\nFuel stop {len(fuel_stops)}: ${cheapest['Retail Price']}/gal - {cheapest['Truckstop Name']} " +
                            f"at mile {cheapest['route_distance']} ({gallons_needed:.1f} gal = ${fuel_cost:.2f})")
