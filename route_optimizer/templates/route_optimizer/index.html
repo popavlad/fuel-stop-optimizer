@@ -10,9 +10,11 @@
         margin-top: 20px;
       }
       .container {
-        max-width: 800px;
+        display: flex;
+        max-width: 1200px;
         margin: 0 auto;
         padding: 20px;
+        gap: 20px;
       }
       .input-group {
         margin-bottom: 20px;
@@ -29,31 +31,69 @@
         border: none;
         cursor: pointer;
       }
+      .map-container {
+        flex: 1;
+      }
+      .sidebar {
+        width: 300px;
+        padding: 20px;
+        background: #f5f5f5;
+        border-radius: 8px;
+        display: none; /* Hidden by default */
+      }
+      .station-info {
+        margin-bottom: 15px;
+      }
+      .station-info h3 {
+        margin: 0 0 10px 0;
+        color: #333;
+      }
+      .station-detail {
+        margin: 5px 0;
+        font-size: 14px;
+      }
+      .price {
+        font-size: 18px;
+        color: #2ecc71;
+        font-weight: bold;
+      }
     </style>
   </head>
   <body>
     <div class="container">
-      <div class="input-group">
-        <input
-          type="text"
-          id="start"
-          placeholder="Start location (e.g., Miami, FL)"
-        />
-        <input
-          type="text"
-          id="end"
-          placeholder="End location (e.g., Seattle, WA)"
-        />
-        <button onclick="findRoute()">Find Route</button>
+      <div class="map-container">
+        <div class="input-group">
+          <input
+            type="text"
+            id="start"
+            placeholder="Start location (e.g., Miami, FL)"
+          />
+          <input
+            type="text"
+            id="end"
+            placeholder="End location (e.g., Seattle, WA)"
+          />
+          <button onclick="findRoute()">Find Route</button>
+        </div>
+        <div id="map"></div>
+        <div id="results"></div>
       </div>
-      <div id="map"></div>
-      <div id="results"></div>
+
+      <div id="sidebar" class="sidebar">
+        <div class="station-info">
+          <h3 id="station-name"></h3>
+          <p class="station-detail" id="station-location"></p>
+          <p class="station-detail price" id="station-price"></p>
+          <p class="station-detail" id="station-distance"></p>
+        </div>
+      </div>
     </div>
 
     <script>
       let map;
       let markers = [];
       let routeLine;
+      let currentStops = [];
 
       function initMap() {
         map = new google.maps.Map(document.getElementById("map"), {
@@ -87,11 +127,27 @@
         }
       }
 
+      function showStationInfo(station) {
+        const sidebar = document.getElementById("sidebar");
+        document.getElementById("station-name").textContent = station.name;
+        document.getElementById(
+          "station-location"
+        ).textContent = `${station.city}, ${station.state}`;
+        document.getElementById(
+          "station-price"
+        ).textContent = `$${station.price.toFixed(3)}/gallon`;
+        document.getElementById(
+          "station-distance"
+        ).textContent = `Mile ${station.route_distance} on route`;
+        sidebar.style.display = "block";
+      }
+
       function displayRoute(data) {
         // Clear previous markers and route
         markers.forEach((marker) => marker.setMap(null));
         if (routeLine) routeLine.setMap(null);
         markers = [];
+        currentStops = data.fuel_stops;
 
         // Draw route
         const routeCoords = data.route.points.map((point) => ({
@@ -115,8 +171,14 @@
               lng: stop.location.lon,
             },
             map: map,
-            title: `${stop.name} - $${stop.price}`,
+            title: stop.name,
           });
+
+          // Add click listener to marker
+          marker.addListener("click", () => {
+            showStationInfo(stop);
+          });
+
           markers.push(marker);
         });
 
@@ -127,13 +189,15 @@
 
         // Display results
         document.getElementById("results").innerHTML = `
-                <h3>Route Summary:</h3>
-                <p>Total Distance: ${data.route.total_distance} miles</p>
-                <p>Number of Fuel Stops: ${data.number_of_stops}</p>
-                <p>Total Fuel Cost: $${data.total_fuel_cost}</p>
-                <p>Total Gallons: ${data.total_gallons}</p>
-                <p>Savings: $${data.total_savings_based_on_average_price_for_route}</p>
-            `;
+          <h3>Route Summary:</h3>
+          <p>Total Distance: ${Math.round(data.route.total_distance)} miles</p>
+          <p>Number of Fuel Stops: ${data.number_of_stops}</p>
+          <p>Total Fuel Cost: $${data.total_fuel_cost.toFixed(2)}</p>
+          <p>Total Gallons: ${data.total_gallons.toFixed(1)}</p>
+          <p>Savings: $${data.total_savings_based_on_average_price_for_route.toFixed(
+            2
+          )}</p>
+        `;
       }
 
       // Initialize map when page loads
