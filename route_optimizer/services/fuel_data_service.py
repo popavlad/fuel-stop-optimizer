@@ -15,6 +15,12 @@ class FuelDataService:
         if self.stations:
             logger.info(f"Sample station data: {self.stations[0]}")
 
+        # Pre-calculate float values to avoid repeated conversions
+        for station in self.stations:
+            station['latitude'] = float(station['latitude'])
+            station['longitude'] = float(station['longitude'])
+            station['Retail Price'] = float(station['Retail Price'])
+
     def _calculate_distance(self, lat1, lon1, lat2, lon2) -> float:
         """Calculate distance between two points in miles."""
         R = 6371  # Earth's radius in km
@@ -35,60 +41,83 @@ class FuelDataService:
     def get_all_route_stations(self, route_points: List[Dict], total_distance: float) -> List[Dict]:
         """Find all stations near the route and calculate their route distances."""
         logger.info(f"Starting station search along {total_distance} mile route")
-        logger.info(f"First route point: {route_points[0]}")
-        logger.info(f"Last route point: {route_points[-1]}")
         all_stations = {}
         
-        # Sample route points to reduce computation
-        step = max(1, len(route_points) // 1500)
+        # More aggressive sampling of route points
+        step = max(1, len(route_points) // 500)  # Reduced from 1500 to 500 points
         sampled_points = route_points[::step]
-        logger.info(f"Sampling {len(sampled_points)} points from {len(route_points)} total points")
         
-        # Check each station against our route
-        for station in self.stations:
-            try:
-                # Find closest point on route first
+        # Pre-calculate route point coordinates as floats
+        route_coords = [(point['lat'], point['lon']) for point in sampled_points]
+        
+        # Calculate rough bounding box for quick filtering
+        min_lat = min(lat for lat, _ in route_coords) - 0.2  # About 10-15 miles
+        max_lat = max(lat for lat, _ in route_coords) + 0.2
+        min_lon = min(lon for _, lon in route_coords) - 0.2
+        max_lon = max(lon for _, lon in route_coords) + 0.2
+        
+        # Quick filter stations within bounding box
+        filtered_stations = [
+            station for station in self.stations
+            if min_lat <= station['latitude'] <= max_lat
+            and min_lon <= station['longitude'] <= max_lon
+        ]
+        
+        logger.info(f"Filtered to {len(filtered_stations)} stations within bounding box")
+        
+        # Process stations in chunks for better performance
+        chunk_size = 100
+        for i in range(0, len(filtered_stations), chunk_size):
+            station_chunk = filtered_stations[i:i + chunk_size]
+            
+            for station in station_chunk:
+                # Quick distance check to nearest point
                 min_distance = float('inf')
                 closest_point_index = 0
                 
-                # Quick scan for closest point using sampled points
-                for i, point in enumerate(sampled_points):
+                # Check every 5th point first for rough estimate
+                for i in range(0, len(route_coords), 5):
                     distance = self._calculate_distance(
-                        float(station['latitude']), 
-                        float(station['longitude']),
-                        point['lat'], point['lon']
+                        station['latitude'],
+                        station['longitude'],
+                        route_coords[i][0],
+                        route_coords[i][1]
                     )
                     if distance < min_distance:
                         min_distance = distance
                         closest_point_index = i
                 
+                # If rough estimate is promising, do detailed check around that area
+                if min_distance <= 15:  # Slightly larger initial filter
+                    start_idx = max(0, closest_point_index - 10)
+                    end_idx = min(len(route_coords), closest_point_index + 10)
+                    
+                    for i in range(start_idx, end_idx):
+                        distance = self._calculate_distance(
+                            station['latitude'],
+                            station['longitude'],
+                            route_coords[i][0],
+                            route_coords[i][1]
+                        )
+                        if distance < min_distance:
+                            min_distance = distance
+                            closest_point_index = i
+                
                 # If station is within reasonable distance of route
-                if min_distance <= 10:  # 10 miles from highway
-                    distance_covered = 0
-                    
-                    # Calculate route distance up to this point
-                    for i in range(closest_point_index):
-                        if i > 0:
-                            distance_covered += self._calculate_distance(
-                                sampled_points[i-1]['lat'], sampled_points[i-1]['lon'],
-                                sampled_points[i]['lat'], sampled_points[i]['lon']
-                            )
-                    
+                if min_distance <= 10:
                     station_id = station['OPIS Truckstop ID']
                     if station_id not in all_stations:
+                        # Approximate route distance based on index
+                        route_distance = (closest_point_index / len(route_coords)) * total_distance
+                        
                         station_copy = station.copy()
-                        station_copy['route_distance'] = round(distance_covered, 1)
+                        station_copy['route_distance'] = round(route_distance, 1)
                         station_copy['highway_distance'] = round(min_distance, 1)
                         all_stations[station_id] = station_copy
-                        
-            except (ValueError, KeyError) as e:
-                logger.warning(f"Skipping invalid station data: {e}")
-                continue
-        
+
         unique_stations = list(all_stations.values())
         unique_stations.sort(key=lambda x: x['route_distance'])
         
-        logger.info(f"\nFound {len(unique_stations)} unique stations along {round(total_distance)} mile route")
         return unique_stations
 
     def find_optimal_fuel_stops(self, route_stations: List[Dict], total_distance: float) -> List[Dict]:
