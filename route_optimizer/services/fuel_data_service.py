@@ -38,13 +38,48 @@ class FuelDataService:
         
         return R * c * 0.621371  # Convert km to miles
 
+    def _find_closest_point(self, station, route_coords):
+        """Helper function to find the closest route point to a station."""
+        min_distance = float('inf')
+        closest_index = 0
+        
+        # Quick scan using sparse points
+        for i in range(0, len(route_coords), 5):
+            distance = self._calculate_distance(
+                station['latitude'],
+                station['longitude'],
+                route_coords[i][0],
+                route_coords[i][1]
+            )
+            if distance < min_distance:
+                min_distance = distance
+                closest_index = i
+        
+        # Detailed scan around closest point if within range
+        if min_distance <= 15:
+            start_idx = max(0, closest_index - 10)
+            end_idx = min(len(route_coords), closest_index + 10)
+            
+            for i in range(start_idx, end_idx):
+                distance = self._calculate_distance(
+                    station['latitude'],
+                    station['longitude'],
+                    route_coords[i][0],
+                    route_coords[i][1]
+                )
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_index = i
+        
+        return min_distance, closest_index
+
     def get_all_route_stations(self, route_points: List[Dict], total_distance: float) -> List[Dict]:
         """Find all stations near the route and calculate their route distances."""
         logger.info(f"Starting station search along {total_distance} mile route")
         all_stations = {}
         
         # More aggressive sampling of route points
-        step = max(1, len(route_points) // 500)  # Reduced from 1500 to 500 points
+        step = max(1, len(route_points) // 500)  
         sampled_points = route_points[::step]
         
         # Pre-calculate route point coordinates as floats
@@ -71,49 +106,17 @@ class FuelDataService:
             station_chunk = filtered_stations[i:i + chunk_size]
             
             for station in station_chunk:
-                # Quick distance check to nearest point
-                min_distance = float('inf')
-                closest_point_index = 0
+                min_distance, closest_point_index = self._find_closest_point(station, route_coords)
                 
-                # Check every 5th point first for rough estimate
-                for i in range(0, len(route_coords), 5):
-                    distance = self._calculate_distance(
-                        station['latitude'],
-                        station['longitude'],
-                        route_coords[i][0],
-                        route_coords[i][1]
-                    )
-                    if distance < min_distance:
-                        min_distance = distance
-                        closest_point_index = i
-                
-                # If rough estimate is promising, do detailed check around that area
-                if min_distance <= 15:  # Slightly larger initial filter
-                    start_idx = max(0, closest_point_index - 10)
-                    end_idx = min(len(route_coords), closest_point_index + 10)
-                    
-                    for i in range(start_idx, end_idx):
-                        distance = self._calculate_distance(
-                            station['latitude'],
-                            station['longitude'],
-                            route_coords[i][0],
-                            route_coords[i][1]
-                        )
-                        if distance < min_distance:
-                            min_distance = distance
-                            closest_point_index = i
-                
-                # If station is within reasonable distance of route
                 if min_distance <= 10:
                     station_id = station['OPIS Truckstop ID']
                     if station_id not in all_stations:
-                        # Approximate route distance based on index
                         route_distance = (closest_point_index / len(route_coords)) * total_distance
-                        
-                        station_copy = station.copy()
-                        station_copy['route_distance'] = round(route_distance, 1)
-                        station_copy['highway_distance'] = round(min_distance, 1)
-                        all_stations[station_id] = station_copy
+                        all_stations[station_id] = {
+                            **station,
+                            'route_distance': round(route_distance, 1),
+                            'highway_distance': round(min_distance, 1)
+                        }
 
         unique_stations = list(all_stations.values())
         unique_stations.sort(key=lambda x: x['route_distance'])
@@ -128,15 +131,6 @@ class FuelDataService:
         SEARCH_START = TANK_RANGE * 0.7  # Start looking at 70% tank depletion (350 miles)
         SAFETY_BUFFER = 150  # Look for stations within next 150 miles
         
-        # Log station distribution first
-        logger.info("\nStation distribution along route:")
-        for i in range(0, int(total_distance), 100):
-            stations_in_range = [s for s in route_stations 
-                               if i <= s['route_distance'] < i + 100]
-            if stations_in_range:
-                logger.info(f"Mile {i}-{i+100}: {len(stations_in_range)} stations " +
-                           f"(cheapest: ${min(float(s['Retail Price']) for s in stations_in_range):.3f}, " +
-                           f"{min(s['highway_distance'] for s in stations_in_range):.1f} miles from highway)")
         
         logger.info(f"\nStarting with full tank ({TANK_SIZE} gallons, {TANK_RANGE} mile range)")
         

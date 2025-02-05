@@ -26,7 +26,6 @@ class GoogleMapsService:
             )
             
             data = response.json()
-            logger.info(f"Raw route data: {data}")
             
             if data.get('status') != 'OK':
                 raise Exception(f"Route API failed: {data.get('status')} - {data.get('error_message', 'No error message')}")
